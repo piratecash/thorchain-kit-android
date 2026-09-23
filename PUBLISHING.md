@@ -5,8 +5,12 @@ The kit publishes via [JitPack](https://jitpack.io), from a numeric SemVer tag
 (`hd-wallet-kit-android`). `jitpack.yml` pins `jdk: openjdk21` and runs
 
 ```
-./gradlew -PVERSION_NAME=$VERSION publishToMavenLocal
+./gradlew publishToMavenLocal
 ```
+
+The version comes from JitPack's `JITPACK_VERSION` / `VERSION` (the tag, or the commit hash of a
+dry run), then the `VERSION_NAME` Gradle property, then `0.0.0-SNAPSHOT` — the same scheme as
+`bitcoin-kit-android` and `zcash-sdk-kmp`.
 
 which publishes both `thorchainkit` and `thorchainkit-proto` under group
 `com.github.piratecash.thorchain-kit-android`:

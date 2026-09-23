@@ -8,14 +8,12 @@ plugins {
     alias(libs.plugins.protobuf) apply false
 }
 
-val publicationVersion = providers.gradleProperty("VERSION_NAME").orElse("0.0.0-SNAPSHOT").get()
-// A commit hash is JitPack's dry run of an untagged commit: it can never be mistaken for a release.
-if (publicationVersion != "0.0.0-SNAPSHOT" &&
-    !publicationVersion.matches(Regex("(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)")) &&
-    !publicationVersion.matches(Regex("[0-9a-f]{7,40}"))
-) {
-    throw GradleException("VERSION_NAME must be exact numeric SemVer (MAJOR.MINOR.PATCH) or a commit hash")
-}
+// JitPack builds a tag or a commit and passes it in; local builds fall back to a snapshot.
+val publicationVersion: String = providers.environmentVariable("JITPACK_VERSION")
+    .orElse(providers.environmentVariable("VERSION"))
+    .orElse(providers.gradleProperty("VERSION_NAME"))
+    .orElse("0.0.0-SNAPSHOT")
+    .get()
 
 val publishedModules = setOf("thorchainkit", "thorchainkit-proto")
 
