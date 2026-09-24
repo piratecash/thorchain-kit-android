@@ -15,6 +15,7 @@ import io.horizontalsystems.thorchainkit.transaction.Signer
 import io.horizontalsystems.thorchainkit.transaction.TransactionSender
 import io.horizontalsystems.thorchainkit.transaction.TxBuilder
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -229,4 +230,181 @@ class TransactionSenderTest {
             runBlocking { watchSender.send(address, BigInteger.ONE, "rune", null, signer) }
         }
     }
+
+    @Test
+    fun signSend_sameInputs_producesBytesIdenticalToSendPath() {
+        var broadcastBytes: ByteArray? = null
+        val api = object : SendFakeApi() {
+            override suspend fun broadcast(request: BroadcastRequest): BroadcastResponse {
+                broadcastBytes = Base64.getDecoder().decode(request.txBytes)
+                return BroadcastResponse(TxResponse("0", null, null, 0, null))
+            }
+        }
+        val sender = sender(api)
+
+        val sentHash = runBlocking { sender.send(address, BigInteger.TEN, "rune", "memo", signer) }
+        val signed = runBlocking { sender.signSend(address, BigInteger.TEN, "rune", "memo", signer) }
+
+        assertArrayEquals(broadcastBytes, signed.raw)
+        assertEquals(sentHash, signed.hash)
+    }
+
+    @Test
+    fun signSend_success_returnsHashAccountNumberAndSequenceWithoutBroadcast() {
+        val api = SendFakeApi()
+
+        val signed = runBlocking { sender(api).signSend(address, BigInteger.ONE, "rune", null, signer) }
+
+        assertEquals(TxBuilder.txHash(signed.raw), signed.hash)
+        assertEquals(12345L, signed.accountNumber)
+        assertEquals(7L, signed.sequence)
+        assertEquals(0, api.broadcastCalls)
+    }
+
+    @Test
+    fun signSend_watchSigner_throwsSignerMismatch() {
+        val watchOnly = Address.fromString("thor1dheycdevq39qlkxs2a6wuuzyn4aqxhve4qxtxt", Network.Mainnet)
+        val watchSender = TransactionSender(watchOnly, Network.Mainnet, ThornodeApiProvider(listOf(SendFakeApi())))
+
+        assertThrows(TransactionSender.SendError.SignerMismatch::class.java) {
+            runBlocking { watchSender.signSend(address, BigInteger.ONE, "rune", null, signer) }
+        }
+    }
+
+    @Test
+    fun signSend_accountMissing_throwsAccountNotFound() {
+        val api = object : SendFakeApi() {
+            override suspend fun account(address: String): AccountResponse = throw httpException(404)
+        }
+
+        assertThrows(TransactionSender.SendError.AccountNotFound::class.java) {
+            runBlocking { sender(api).signSend(address, BigInteger.ONE, "rune", null, signer) }
+        }
+    }
+
+    @Test
+    fun signSend_otherNetworkAddress_throwsIllegalArgument() {
+        val mayaAddress = Address(Network.MayaMainnet.addressPrefix, address.payload)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { sender(SendFakeApi()).signSend(mayaAddress, BigInteger.ONE, "rune", null, signer) }
+        }
+    }
+
+    @Test
+    fun broadcastRawTransaction_ambiguousThenFound_returnsHash() {
+        val raw = byteArrayOf(1, 2, 3)
+        val api = object : FakeThornodeApi() {
+            override suspend fun broadcast(request: BroadcastRequest): BroadcastResponse = throw IOException("timeout")
+
+            override suspend fun transaction(hash: String): TxByHashResponse =
+                TxByHashResponse(TxResponse("100", hash, null, 0, null))
+        }
+
+        val hash = runBlocking { sender(api).broadcastRawTransaction(raw) }
+
+        assertEquals(TxBuilder.txHash(raw), hash)
+    }
+
+    @Test
+    fun broadcastRawTransaction_ambiguousUnresolved_throwsPossiblyAccepted() {
+        val raw = byteArrayOf(1, 2, 3)
+        val api = object : FakeThornodeApi() {
+            override suspend fun broadcast(request: BroadcastRequest): BroadcastResponse = throw IOException("timeout")
+
+            override suspend fun transaction(hash: String): TxByHashResponse = throw httpException(404)
+        }
+
+        val error = assertThrows(TransactionSender.SendError.PossiblyAccepted::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(raw) }
+        }
+
+        assertEquals(TxBuilder.txHash(raw), error.txHash)
+    }
+
+    @Test
+    fun broadcastRawTransaction_code32OtherCodespace_throwsBroadcastError() {
+        val api = rejectingApi(code = 32, codespace = "thorchain")
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals(32, error.code)
+    }
+
+    @Test
+    fun broadcastRawTransaction_otherRejection_rethrowsSameBroadcastError() {
+        val api = rejectingApi(code = 5, codespace = "sdk")
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals(5, error.code)
+        assertEquals("sdk", error.codespace)
+    }
+
+    @Test
+    fun broadcastRawTransaction_code32SequenceBehindNode_throwsSequenceConsumed() {
+        val api = rejectingApi(code = 32, codespace = "sdk", rawLog = sequenceMismatchLog(expected = 8, got = 7))
+
+        assertThrows(TransactionSender.SendError.SequenceConsumed::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+    }
+
+    @Test
+    fun broadcastRawTransaction_code32SequenceAheadOfNode_throwsBroadcastError() {
+        val api = rejectingApi(code = 32, codespace = "sdk", rawLog = sequenceMismatchLog(expected = 7, got = 8))
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals(32, error.code)
+    }
+
+    @Test
+    fun broadcastRawTransaction_code32UnparseableLog_throwsBroadcastError() {
+        val api = rejectingApi(code = 32, codespace = "sdk", rawLog = "incorrect account sequence")
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals(32, error.code)
+    }
+
+    @Test
+    fun broadcastRawTransaction_code32ConsumedLogOtherCodespace_throwsBroadcastError() {
+        val api = rejectingApi(code = 32, codespace = "thorchain", rawLog = sequenceMismatchLog(expected = 8, got = 7))
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals("thorchain", error.codespace)
+    }
+
+    @Test
+    fun broadcastRawTransaction_otherSdkCodeWithConsumedLog_throwsBroadcastError() {
+        val api = rejectingApi(code = 5, codespace = "sdk", rawLog = sequenceMismatchLog(expected = 8, got = 7))
+
+        val error = assertThrows(BroadcastError::class.java) {
+            runBlocking { sender(api).broadcastRawTransaction(byteArrayOf(1, 2, 3)) }
+        }
+
+        assertEquals(5, error.code)
+    }
+
+    // cosmos-sdk x/auth/ante sigverify, wrapped with ErrWrongSequence
+    private fun sequenceMismatchLog(expected: Long, got: Long): String =
+        "account sequence mismatch, expected $expected, got $got: incorrect account sequence"
+
+    private fun rejectingApi(code: Int, codespace: String, rawLog: String = "rejected"): FakeThornodeApi =
+        object : FakeThornodeApi() {
+            override suspend fun broadcast(request: BroadcastRequest): BroadcastResponse =
+                BroadcastResponse(TxResponse(null, null, codespace, code, rawLog))
+        }
 }

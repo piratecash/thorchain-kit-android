@@ -1,5 +1,6 @@
 package io.horizontalsystems.thorchainkit.network
 
+import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
@@ -9,7 +10,7 @@ internal object ApiClient {
 
     private val logger = Logger.getLogger("ThorchainKit")
 
-    fun build(): OkHttpClient {
+    fun build(eventListenerFactory: EventListener.Factory?): OkHttpClient {
         val loggingInterceptor = HttpLoggingInterceptor { message -> logger.info(message) }
             .setLevel(HttpLoggingInterceptor.Level.BASIC)
 
@@ -25,6 +26,7 @@ internal object ApiClient {
             }
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            .apply { eventListenerFactory?.let(::eventListenerFactory) }
             .build()
     }
 }

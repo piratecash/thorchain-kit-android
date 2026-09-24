@@ -28,6 +28,8 @@ kotlin {
             dependencies {
                 // Proto classes shipped inside the pre-KMP AAR, so consumers compiled against them.
                 api(project(":thorchainkit-proto"))
+                // Public API exposes okhttp3.EventListener.Factory (getInstance/create overloads).
+                api(libs.okhttp)
                 implementation(libs.hd.wallet.kit)
                 implementation(libs.secp256k1.kmp)
                 implementation(libs.retrofit)

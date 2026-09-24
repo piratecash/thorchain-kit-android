@@ -1,7 +1,10 @@
 package io.horizontalsystems.thorchainkit.transaction
 
+import com.google.protobuf.Any as ProtoAny
+import io.horizontalsystems.hdwalletkit.Utils
 import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.models.Asset
+import io.horizontalsystems.thorchainkit.models.SignedTransaction
 import io.horizontalsystems.thorchainkit.network.BroadcastAmbiguousError
 import io.horizontalsystems.thorchainkit.network.BroadcastError
 import io.horizontalsystems.thorchainkit.network.Network
@@ -29,23 +32,49 @@ class TransactionSender internal constructor(
     // serializes sends: concurrent sends would fetch the same sequence and race each other
     private val sendMutex = Mutex()
 
-    suspend fun send(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): String {
+    suspend fun send(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): String =
+        sendMutex.withLock {
+            broadcastRawTransaction(signMsgSend(to, amount, denom, memo, signer).raw)
+        }
+
+    public suspend fun signSend(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): SignedTransaction =
+        sendMutex.withLock { signMsgSend(to, amount, denom, memo, signer) }
+
+    suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: Signer): String =
+        sendMutex.withLock {
+            val message = TxBuilder.msgDeposit(asset, amount, memo, address)
+            broadcastRawTransaction(sign(listOf(message), "", TxBuilder.DEPOSIT_GAS_LIMIT, signer).raw)
+        }
+
+    public suspend fun broadcastRawTransaction(raw: ByteArray): String =
+        try {
+            thornodeApiProvider.broadcast(raw)
+        } catch (error: BroadcastAmbiguousError) {
+            resolveAmbiguousBroadcast(error)
+        } catch (error: BroadcastError) {
+            throw if (error.isSequenceConsumed()) SendError.SequenceConsumed(error) else error
+        }
+
+    private suspend fun signMsgSend(
+        to: Address,
+        amount: BigInteger,
+        denom: String,
+        memo: String?,
+        signer: Signer
+    ): SignedTransaction {
+        require(to.prefix == network.addressPrefix) { "Address prefix mismatch: ${to.prefix}" }
+
         val message = TxBuilder.msgSend(address, to, amount, denom)
-        return signAndBroadcast(listOf(message), memo ?: "", TxBuilder.DEFAULT_GAS_LIMIT, signer)
+        return sign(listOf(message), memo ?: "", TxBuilder.DEFAULT_GAS_LIMIT, signer)
     }
 
-    suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: Signer): String {
-        val message = TxBuilder.msgDeposit(asset, amount, memo, address)
-        return signAndBroadcast(listOf(message), "", TxBuilder.DEPOSIT_GAS_LIMIT, signer)
-    }
-
-    private suspend fun signAndBroadcast(
-        messages: List<com.google.protobuf.Any>,
+    private suspend fun sign(
+        messages: List<ProtoAny>,
         memo: String,
         gasLimit: Long,
         signer: Signer
-    ): String = sendMutex.withLock {
-        val signerAddress = Address(address.prefix, io.horizontalsystems.hdwalletkit.Utils.sha256Hash160(signer.publicKey))
+    ): SignedTransaction {
+        val signerAddress = Address(address.prefix, Utils.sha256Hash160(signer.publicKey))
         if (signerAddress != address) {
             throw SendError.SignerMismatch()
         }
@@ -66,11 +95,18 @@ class TransactionSender internal constructor(
             signer = signer
         )
 
-        try {
-            thornodeApiProvider.broadcast(txRaw)
-        } catch (error: BroadcastAmbiguousError) {
-            resolveAmbiguousBroadcast(error)
-        }
+        return SignedTransaction(txRaw, TxBuilder.txHash(txRaw), account.accountNumber, account.sequence)
+    }
+
+    // consumed only when the node is past the signed sequence; "got" ahead of "expected" is a
+    // lagging node and the tx is still valid
+    private fun BroadcastError.isSequenceConsumed(): Boolean {
+        if (codespace != ThornodeApiProvider.SDK_CODESPACE || code != ThornodeApiProvider.CODE_WRONG_SEQUENCE) return false
+
+        val match = SEQUENCE_MISMATCH.find(log) ?: return false
+        val expected = match.groupValues[1].toLongOrNull() ?: return false
+        val got = match.groupValues[2].toLongOrNull() ?: return false
+        return got < expected
     }
 
     // The broadcast request failed locally, but the tx may have reached the node.
@@ -116,11 +152,18 @@ class TransactionSender internal constructor(
             override val message: String
                 get() = "Broadcast result unknown; transaction $txHash may still confirm"
         }
+
+        // The account sequence this tx was signed with is already used — possibly by this very
+        // tx if it was broadcast before. It can no longer be accepted; check transactionExists(hash).
+        public class SequenceConsumed(cause: Throwable? = null) : SendError(cause)
     }
 
     companion object {
         // ~6s block time: 5 x 3s covers inclusion of an accepted tx
         private const val CONFIRMATION_ATTEMPTS = 5
         private const val CONFIRMATION_DELAY_MS = 3_000L
+
+        // cosmos-sdk x/auth/ante sigverify
+        private val SEQUENCE_MISMATCH = Regex("account sequence mismatch, expected (\\d+), got (\\d+)")
     }
 }

@@ -6,6 +6,7 @@ import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.models.DenomBalance
 import io.horizontalsystems.thorchainkit.transaction.TxBuilder
 import kotlinx.coroutines.CancellationException
+import okhttp3.EventListener
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -108,7 +109,7 @@ class ThornodeApiProvider internal constructor(
                     return expectedHash
                 }
 
-                throw BroadcastError(code, response.rawLog ?: "")
+                throw BroadcastError(code, response.rawLog ?: "", response.codespace)
             } catch (error: BroadcastError) {
                 // If an earlier attempt already failed ambiguously, this rejection may be a
                 // side effect of that attempt having succeeded (e.g. "sequence mismatch"
@@ -136,13 +137,22 @@ class ThornodeApiProvider internal constructor(
 
     // null while the transaction is not yet included in a block
     suspend fun fetchTransaction(hash: String): TxResponse? =
+        withFailover { api -> transaction(api, hash) }
+
+    // false while not found and for a tx that failed on-chain
+    public suspend fun transactionExists(hash: String): Boolean =
         withFailover { api ->
-            try {
-                api.transaction(hash).txResponse
-                    ?: throw InvalidProviderResponse("tx by hash: missing tx_response")
-            } catch (error: HttpException) {
-                if (error.code() == 404) null else throw error
-            }
+            val tx = transaction(api, hash) ?: return@withFailover false
+            val code = tx.code ?: throw InvalidProviderResponse("tx by hash: missing code")
+            code == 0
+        }
+
+    private suspend fun transaction(api: ThornodeApi, hash: String): TxResponse? =
+        try {
+            api.transaction(hash).txResponse
+                ?: throw InvalidProviderResponse("tx by hash: missing tx_response")
+        } catch (error: HttpException) {
+            if (error.code() == 404) null else throw error
         }
 
     private suspend fun <T> withFailover(block: suspend (ThornodeApi) -> T): T {
@@ -167,11 +177,17 @@ class ThornodeApiProvider internal constructor(
 
     companion object {
 
-        fun create(baseUrls: List<URL>, protocolPath: String = "thorchain") = ThornodeApiProvider(
+        fun create(baseUrls: List<URL>, protocolPath: String = "thorchain") = create(baseUrls, protocolPath, null)
+
+        public fun create(
+            baseUrls: List<URL>,
+            protocolPath: String,
+            eventListenerFactory: EventListener.Factory?
+        ): ThornodeApiProvider = ThornodeApiProvider(
             baseUrls.map {
                 Retrofit.Builder()
                     .baseUrl(it.toString())
-                    .client(ApiClient.build())
+                    .client(ApiClient.build(eventListenerFactory))
                     .addConverterFactory(GsonConverterFactory.create())
                     .build()
                     .create(ThornodeApi::class.java)
@@ -182,6 +198,9 @@ class ThornodeApiProvider internal constructor(
         // cosmos-sdk root codespace, error 19: ErrTxInMempoolCache
         const val SDK_CODESPACE = "sdk"
         const val CODE_TX_IN_MEMPOOL_CACHE = 19
+
+        // cosmos-sdk root codespace, error 32: ErrWrongSequence
+        internal const val CODE_WRONG_SEQUENCE = 32
 
         private fun parseAmount(value: String?, context: String): BigInteger {
             val string = value ?: throw InvalidProviderResponse("$context: missing amount")
@@ -223,7 +242,11 @@ class ThornodeApiProvider internal constructor(
     }
 }
 
-class BroadcastError(val code: Int, val log: String) : Throwable() {
+class BroadcastError @JvmOverloads constructor(
+    val code: Int,
+    val log: String,
+    public val codespace: String? = null
+) : Throwable() {
     override val message: String
         get() = "Broadcast failed with code: $code, log: $log"
 }

@@ -2,6 +2,7 @@ package io.horizontalsystems.thorchainkit
 
 import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.network.Network
+import okhttp3.EventListener
 import java.io.File
 import java.net.URL
 
@@ -21,6 +22,21 @@ public fun ThorchainKit.Companion.getInstance(
     midgardUrls: List<URL> = network.midgardUrls
 ): ThorchainKit = getInstance(PlatformContext(dataDir), seed, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls)
 
+/** As the overload above; [eventListenerFactory] observes every THORNode and Midgard HTTP call. */
+public fun ThorchainKit.Companion.getInstance(
+    dataDir: File,
+    seed: ByteArray,
+    network: Network,
+    walletId: String,
+    databaseKey: ByteArray,
+    syncInterval: Long,
+    thornodeUrls: List<URL>,
+    midgardUrls: List<URL>,
+    eventListenerFactory: EventListener.Factory?
+): ThorchainKit = getInstance(
+    PlatformContext(dataDir), seed, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls, eventListenerFactory
+)
+
 /**
  * Desktop watch-account factory: address only; send/deposit fail with SignerMismatch. Supported
  * platforms and [databaseKey] rules as for the seed overload.
@@ -35,6 +51,21 @@ public fun ThorchainKit.Companion.getInstance(
     thornodeUrls: List<URL> = network.thornodeUrls,
     midgardUrls: List<URL> = network.midgardUrls
 ): ThorchainKit = getInstance(PlatformContext(dataDir), address, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls)
+
+/** As the overload above; [eventListenerFactory] observes every THORNode and Midgard HTTP call. */
+public fun ThorchainKit.Companion.getInstance(
+    dataDir: File,
+    address: Address,
+    network: Network,
+    walletId: String,
+    databaseKey: ByteArray,
+    syncInterval: Long,
+    thornodeUrls: List<URL>,
+    midgardUrls: List<URL>,
+    eventListenerFactory: EventListener.Factory?
+): ThorchainKit = getInstance(
+    PlatformContext(dataDir), address, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls, eventListenerFactory
+)
 
 /**
  * Call after [ThorchainKit.stop], as on Android: it closes every database the kit opened for this

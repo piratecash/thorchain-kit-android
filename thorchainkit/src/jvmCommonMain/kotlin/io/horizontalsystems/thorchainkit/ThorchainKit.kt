@@ -5,6 +5,7 @@ import io.horizontalsystems.thorchainkit.database.Storage
 import io.horizontalsystems.thorchainkit.database.ThorchainDatabaseManager
 import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.models.Asset
+import io.horizontalsystems.thorchainkit.models.SignedTransaction
 import io.horizontalsystems.thorchainkit.models.Transaction
 import io.horizontalsystems.thorchainkit.network.ConnectionManager
 import io.horizontalsystems.thorchainkit.network.MidgardProvider
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.EventListener
 import java.math.BigInteger
 import java.net.URL
 import java.util.Objects
@@ -143,12 +145,28 @@ class ThorchainKit private constructor(
         memo: String? = null,
         signer: Signer
     ): String {
-        require(to.prefix == network.addressPrefix) { "Address prefix mismatch: ${to.prefix}" }
-
         val txHash = transactionSender.send(to, amount, denom, memo, signer)
         refresh()
         return txHash
     }
+
+    public suspend fun signSend(
+        to: Address,
+        amount: BigInteger,
+        signer: Signer,
+        denom: String = network.assetResolver.nativeDenom,
+        memo: String? = null
+    ): SignedTransaction = transactionSender.signSend(to, amount, denom, memo, signer)
+
+    public suspend fun broadcastRawTransaction(raw: ByteArray): String {
+        val txHash = transactionSender.broadcastRawTransaction(raw)
+        refresh()
+        return txHash
+    }
+
+    // true only once the tx is included in a block and succeeded
+    public suspend fun transactionExists(hash: String): Boolean =
+        thornodeApiProvider.transactionExists(hash)
 
     suspend fun deposit(
         asset: Asset,
@@ -235,7 +253,25 @@ class ThorchainKit private constructor(
             thornodeUrls: List<URL> = network.thornodeUrls,
             midgardUrls: List<URL> = network.midgardUrls
         ): ThorchainKit {
-            return getInstance(context, getAddress(seed, network), network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls)
+            return getInstance(context, seed, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls, null)
+        }
+
+        /** As the overload above; [eventListenerFactory] observes every THORNode and Midgard HTTP call. */
+        public fun getInstance(
+            context: PlatformContext,
+            seed: ByteArray,
+            network: Network,
+            walletId: String,
+            databaseKey: ByteArray,
+            syncInterval: Long,
+            thornodeUrls: List<URL>,
+            midgardUrls: List<URL>,
+            eventListenerFactory: EventListener.Factory?
+        ): ThorchainKit {
+            return getInstance(
+                context, getAddress(seed, network), network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls,
+                eventListenerFactory
+            )
         }
 
         /**
@@ -252,12 +288,27 @@ class ThorchainKit private constructor(
             thornodeUrls: List<URL> = network.thornodeUrls,
             midgardUrls: List<URL> = network.midgardUrls
         ): ThorchainKit {
+            return getInstance(context, address, network, walletId, databaseKey, syncInterval, thornodeUrls, midgardUrls, null)
+        }
+
+        /** As the overload above; [eventListenerFactory] observes every THORNode and Midgard HTTP call. */
+        public fun getInstance(
+            context: PlatformContext,
+            address: Address,
+            network: Network,
+            walletId: String,
+            databaseKey: ByteArray,
+            syncInterval: Long,
+            thornodeUrls: List<URL>,
+            midgardUrls: List<URL>,
+            eventListenerFactory: EventListener.Factory?
+        ): ThorchainKit {
             require(address.prefix == network.addressPrefix) { "Address prefix mismatch: ${address.prefix}" }
             val key = validatedDatabaseKey(databaseKey)
 
             try {
-                val thornodeApiProvider = ThornodeApiProvider.create(thornodeUrls, network.protocolPath)
-                val midgardProvider = MidgardProvider.create(midgardUrls)
+                val thornodeApiProvider = ThornodeApiProvider.create(thornodeUrls, network.protocolPath, eventListenerFactory)
+                val midgardProvider = MidgardProvider.create(midgardUrls, eventListenerFactory)
 
                 val mainDatabase = ThorchainDatabaseManager.getMainDatabase(context, network, walletId, key)
                 val storage = Storage(mainDatabase)

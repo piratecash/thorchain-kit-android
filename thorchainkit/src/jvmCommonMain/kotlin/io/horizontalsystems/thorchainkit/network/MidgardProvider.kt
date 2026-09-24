@@ -1,6 +1,7 @@
 package io.horizontalsystems.thorchainkit.network
 
 import kotlinx.coroutines.CancellationException
+import okhttp3.EventListener
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -43,11 +44,13 @@ class MidgardProvider internal constructor(
 
     companion object {
 
-        fun create(baseUrls: List<URL>) = MidgardProvider(
+        fun create(baseUrls: List<URL>) = create(baseUrls, null)
+
+        public fun create(baseUrls: List<URL>, eventListenerFactory: EventListener.Factory?): MidgardProvider = MidgardProvider(
             baseUrls.map {
                 Retrofit.Builder()
                     .baseUrl(it.toString())
-                    .client(ApiClient.build())
+                    .client(ApiClient.build(eventListenerFactory))
                     .addConverterFactory(GsonConverterFactory.create())
                     .build()
                     .create(MidgardApi::class.java)

@@ -1,6 +1,7 @@
 package io.horizontalsystems.thorchainkit
 
 import io.horizontalsystems.thorchainkit.models.Address
+import com.sun.net.httpserver.HttpServer
 import io.horizontalsystems.thorchainkit.network.Network
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +10,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.net.InetSocketAddress
 import java.net.URL
 
 class DesktopThorchainKitTest {
@@ -65,5 +67,48 @@ class DesktopThorchainKitTest {
 
         val left = dataDir.listFiles().orEmpty().filter { it.name.startsWith(databaseName) }
         assertFalse(left.map { it.name }.toString(), left.isNotEmpty())
+    }
+
+    @Test
+    fun getInstance_eventListenerFactory_receivesCallEvents() {
+        val server = thornodeStub()
+        val base = "http://127.0.0.1:${server.address.port}"
+        val factory = RecordingEventListenerFactory()
+        val kit = ThorchainKit.getInstance(
+            dataDir(), address, Network.Mainnet, walletId, databaseKey,
+            syncInterval = 15,
+            thornodeUrls = listOf(URL("$base/thornode/")),
+            midgardUrls = listOf(URL("$base/midgard/")),
+            eventListenerFactory = factory
+        )
+
+        try {
+            kit.start()
+            val deadline = System.currentTimeMillis() + 10_000
+            while (factory.startedUrls.none { it.startsWith("$base/midgard/") } && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+        } finally {
+            kit.stop()
+            server.stop(0)
+        }
+
+        assertTrue(factory.startedUrls.toString(), factory.startedUrls.any { it.startsWith("$base/thornode/") })
+        assertTrue(factory.startedUrls.toString(), factory.startedUrls.any { it.startsWith("$base/midgard/") })
+    }
+
+    // Answers just enough THORNode for the syncer to reach Midgard.
+    private fun thornodeStub(): HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            val path = exchange.requestURI.path
+            val body = when {
+                path.contains("/lastblock/") -> """[{"thorchain": 1}]"""
+                path.contains("/balances/") -> """{"balances": []}"""
+                else -> """{"actions": [], "meta": {}}"""
+            }.toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        start()
     }
 }

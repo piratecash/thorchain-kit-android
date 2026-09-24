@@ -78,6 +78,13 @@ Watch-only (address-only) instances are available on both platforms via the
 `getInstance(context/dataDir, address, network, walletId, databaseKey)` overload; `send` /
 `deposit` fail with `SignerMismatch` on those.
 
+Offline signing: `signSend` signs without broadcasting (it still fetches the account number and
+sequence) and returns `SignedTransaction(raw, hash, accountNumber, sequence)`;
+`broadcastRawTransaction(raw)` relays it later. An unknown outcome is
+`SendError.PossiblyAccepted(txHash)`, a consumed sequence is `SendError.SequenceConsumed`;
+`transactionExists(hash)` settles either. Pass `eventListenerFactory` to `getInstance` to observe
+THORNode and Midgard HTTP calls.
+
 Call `kit.stop()` then `ThorchainKit.clear(context/dataDir, network, walletId)` to release
 resources and delete local state for a wallet. On both platforms `clear` first closes every
 database the kit opened for that wallet.
