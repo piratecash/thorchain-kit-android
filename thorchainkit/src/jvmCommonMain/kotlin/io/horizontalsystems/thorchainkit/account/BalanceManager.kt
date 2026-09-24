@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import java.math.BigInteger
 
-class BalanceManager(
+class BalanceManager internal constructor(
     private val storage: Storage,
     private val network: Network
 ) {

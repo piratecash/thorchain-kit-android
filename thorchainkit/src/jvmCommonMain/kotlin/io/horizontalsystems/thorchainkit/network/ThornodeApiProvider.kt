@@ -139,6 +139,11 @@ class ThornodeApiProvider internal constructor(
     suspend fun fetchTransaction(hash: String): TxResponse? =
         withFailover { api -> transaction(api, hash) }
 
+    // One attempt on the primary node, no failover: fee lookups are optional, so a failing node ends
+    // the fee pass instead of multiplying requests. null when the node does not know the hash.
+    internal suspend fun fetchTransactionDetails(hash: String): TxDetails? =
+        nullIfNotFound { apis.first().transactionDetails(hash).txResponse }
+
     // false while not found and for a tx that failed on-chain
     public suspend fun transactionExists(hash: String): Boolean =
         withFailover { api ->
@@ -148,9 +153,11 @@ class ThornodeApiProvider internal constructor(
         }
 
     private suspend fun transaction(api: ThornodeApi, hash: String): TxResponse? =
+        nullIfNotFound { api.transaction(hash).txResponse }
+
+    private suspend fun <T> nullIfNotFound(txResponse: suspend () -> T?): T? =
         try {
-            api.transaction(hash).txResponse
-                ?: throw InvalidProviderResponse("tx by hash: missing tx_response")
+            txResponse() ?: throw InvalidProviderResponse("tx by hash: missing tx_response")
         } catch (error: HttpException) {
             if (error.code() == 404) null else throw error
         }
@@ -202,7 +209,7 @@ class ThornodeApiProvider internal constructor(
         // cosmos-sdk root codespace, error 32: ErrWrongSequence
         internal const val CODE_WRONG_SEQUENCE = 32
 
-        private fun parseAmount(value: String?, context: String): BigInteger {
+        internal fun parseAmount(value: String?, context: String): BigInteger {
             val string = value ?: throw InvalidProviderResponse("$context: missing amount")
             val amount = try {
                 BigInteger(string)

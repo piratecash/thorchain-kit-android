@@ -3,12 +3,10 @@ package io.horizontalsystems.thorchainkit.database
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
-import androidx.room.migration.Migration
-import androidx.sqlite.SQLiteConnection
-import androidx.sqlite.execSQL
 import io.horizontalsystems.thorchainkit.DatabaseKeyMismatchException
 import io.horizontalsystems.thorchainkit.PlatformContext
 import io.horizontalsystems.thorchainkit.models.Balance
+import io.horizontalsystems.thorchainkit.models.FeeLookup
 import io.horizontalsystems.thorchainkit.models.LastBlockHeight
 import io.horizontalsystems.thorchainkit.models.Transaction
 import io.horizontalsystems.thorchainkit.models.TransactionSyncState
@@ -20,8 +18,9 @@ import java.io.File
         Balance::class,
         Transaction::class,
         TransactionSyncState::class,
+        FeeLookup::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(RoomTypeConverters::class)
@@ -30,32 +29,9 @@ abstract class MainDatabase : RoomDatabase() {
     abstract fun lastBlockHeightDao(): LastBlockHeightDao
     abstract fun balanceDao(): BalanceDao
     abstract fun transactionDao(): TransactionDao
+    internal abstract fun feeDao(): FeeDao
 
     companion object {
-
-        internal val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(connection: SQLiteConnection) {
-                connection.execSQL("ALTER TABLE TransactionSyncState ADD COLUMN backfillPageToken TEXT")
-            }
-        }
-
-        // timestamps were stored in milliseconds (Midgard nanoseconds / 1_000_000)
-        // while consumers expect unix seconds
-        internal val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(connection: SQLiteConnection) {
-                connection.execSQL("UPDATE `Transaction` SET timestamp = timestamp / 1000")
-                connection.execSQL("UPDATE TransactionSyncState SET lastTimestamp = lastTimestamp / 1000")
-            }
-        }
-
-        // failed actions were stored with Midgard's indexing status "success"
-        internal val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(connection: SQLiteConnection) {
-                connection.execSQL("UPDATE `Transaction` SET status = 'failed' WHERE type = 'failed'")
-            }
-        }
-
-        internal val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         /**
          * Opens a new instance on every call, under the same file rules as the kit: [databaseKey] is a

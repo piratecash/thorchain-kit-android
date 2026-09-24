@@ -17,7 +17,6 @@ internal actual fun buildMainDatabase(context: PlatformContext, databaseName: St
         // A blocking DAO nested in a transaction must reach Room's `useConnection` undispatched, before
         // its first suspension, so Room recovers the transaction's connection from its thread local.
         .setQueryCoroutineContext(Dispatchers.Unconfined)
-        .addMigrations(*MainDatabase.MIGRATIONS)
         // last resort only: everything stored is a re-syncable cache (no keys)
         .fallbackToDestructiveMigration(dropAllTables = false)
         .build()

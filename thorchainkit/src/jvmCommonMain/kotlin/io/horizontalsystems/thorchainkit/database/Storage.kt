@@ -1,12 +1,13 @@
 package io.horizontalsystems.thorchainkit.database
 
 import io.horizontalsystems.thorchainkit.models.Balance
+import io.horizontalsystems.thorchainkit.models.FeeLookup
 import io.horizontalsystems.thorchainkit.models.LastBlockHeight
 import io.horizontalsystems.thorchainkit.models.Transaction
 import io.horizontalsystems.thorchainkit.models.TransactionSyncState
 import java.math.BigInteger
 
-class Storage(
+internal class Storage(
     private val database: MainDatabase
 ) : TransactionSyncerStorage {
 
@@ -42,8 +43,28 @@ class Storage(
         return database.transactionDao().getPending()
     }
 
-    override fun saveTransactions(transactions: List<Transaction>) {
-        database.transactionDao().insert(transactions)
+    override fun saveTransactions(transactions: List<Transaction>): List<Transaction> {
+        val storedFees = database.feeDao().getTransactionsWithFee(transactions.map { it.hash })
+            .associate { it.hash to it.fee }
+        val stored = transactions.map { it.copy(fee = it.fee ?: storedFees[it.hash]) }
+        database.transactionDao().insert(stored)
+        return stored
+    }
+
+    override fun addFeeLookups(hashes: List<String>) {
+        database.feeDao().insertFeeLookups(hashes.map { FeeLookup(it) })
+    }
+
+    override fun getFeeLookups(limit: Int): List<Transaction> {
+        return database.feeDao().getUnresolvedFeeLookups(limit)
+    }
+
+    override fun saveFee(hash: String, fee: BigInteger?): Transaction? {
+        if (fee != null) {
+            database.feeDao().updateFee(hash, fee)
+        }
+        database.feeDao().resolveFeeLookup(hash)
+        return database.feeDao().getTransaction(hash)
     }
 
     override fun getTransactionSyncTimestamp(): Long? {

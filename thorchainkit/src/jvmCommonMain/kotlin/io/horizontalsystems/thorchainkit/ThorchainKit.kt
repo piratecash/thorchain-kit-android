@@ -187,7 +187,7 @@ class ThorchainKit private constructor(
         statusInfo["Last Block Height"] = lastBlockHeight
         statusInfo["Sync State"] = syncState
         statusInfo["Transactions Sync State"] = transactionsSyncState
-        statusInfo["RUNE Balance"] = runeBalance
+        statusInfo["${network.assetResolver.assetFor(nativeDenom).ticker} Balance"] = runeBalance
 
         return statusInfo
     }
@@ -314,7 +314,7 @@ class ThorchainKit private constructor(
                 val storage = Storage(mainDatabase)
 
                 val balanceManager = BalanceManager(storage, network)
-                val transactionSyncer = TransactionSyncer(address.toString(), midgardProvider, storage)
+                val transactionSyncer = TransactionSyncer(address.toString(), midgardProvider, thornodeApiProvider, network.assetResolver, storage)
                 val syncTimer = SyncTimer(syncInterval, ConnectionManager(context))
                 val syncer = Syncer(address, syncTimer, thornodeApiProvider, balanceManager, transactionSyncer, storage)
                 val transactionSender = TransactionSender(address, network, thornodeApiProvider)

@@ -14,7 +14,10 @@ data class Transaction(
     val status: String,
     val memo: String?,
     val incoming: List<CoinTransfer>,
-    val outgoing: List<CoinTransfer>
+    val outgoing: List<CoinTransfer>,
+    // what the wallet paid for its own transaction, in native base units; null for incoming ones
+    // and when the node cannot tell
+    public val fee: BigInteger? = null
 ) {
 
     val isPending: Boolean

@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
-class Syncer(
+class Syncer internal constructor(
     private val address: Address,
     private val syncTimer: SyncTimer,
     private val thornodeApiProvider: ThornodeApiProvider,
@@ -24,6 +24,7 @@ class Syncer(
 ) : SyncTimer.Listener {
 
     private val syncing = AtomicBoolean(false)
+    private val feeSyncing = AtomicBoolean(false)
     private var scope: CoroutineScope? = null
 
     var syncState: SyncState = SyncState.NotSynced(SyncError.NotStarted())
@@ -55,6 +56,7 @@ class Syncer(
 
     fun stop() {
         syncState = SyncState.NotSynced(SyncError.NotStarted())
+        transactionSyncer.stop()
         syncTimer.stop()
     }
 
@@ -90,6 +92,18 @@ class Syncer(
             } finally {
                 syncing.set(false)
             }
+            syncFees()
+        }
+    }
+
+    // single-flight and outside `syncing`: a slow fee lookup must not hold up the next history round
+    private suspend fun syncFees() {
+        if (syncState !is SyncState.Synced || !feeSyncing.compareAndSet(false, true)) return
+
+        try {
+            transactionSyncer.syncFees()
+        } finally {
+            feeSyncing.set(false)
         }
     }
 

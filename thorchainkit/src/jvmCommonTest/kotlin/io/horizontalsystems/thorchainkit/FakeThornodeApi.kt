@@ -9,12 +9,13 @@ import io.horizontalsystems.thorchainkit.network.ConstantsResponse
 import io.horizontalsystems.thorchainkit.network.NodeInfoResponse
 import io.horizontalsystems.thorchainkit.network.ThornodeApi
 import io.horizontalsystems.thorchainkit.network.TxByHashResponse
+import io.horizontalsystems.thorchainkit.network.TxDetailsResponse
 import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.HttpException
 import retrofit2.Response
 
 // test double: every endpoint fails loudly unless a test overrides it
-open class FakeThornodeApi : ThornodeApi {
+internal open class FakeThornodeApi : ThornodeApi {
 
     var broadcastCalls = 0
 
@@ -38,6 +39,9 @@ open class FakeThornodeApi : ThornodeApi {
 
     override suspend fun transaction(hash: String): TxByHashResponse =
         throw NotImplementedError("transaction")
+
+    override suspend fun transactionDetails(hash: String): TxDetailsResponse =
+        throw NotImplementedError("transactionDetails")
 
     companion object {
         fun httpException(code: Int): HttpException =

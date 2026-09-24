@@ -8,7 +8,7 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-interface ThornodeApi {
+internal interface ThornodeApi {
 
     @GET("cosmos/bank/v1beta1/balances/{address}")
     suspend fun balances(
@@ -37,9 +37,14 @@ interface ThornodeApi {
     @POST("cosmos/tx/v1beta1/txs")
     suspend fun broadcast(@Body request: BroadcastRequest): BroadcastResponse
 
-    @GET("cosmos/tx/v1beta1/txs/{hash}")
+    @GET(TX_BY_HASH)
     suspend fun transaction(@Path("hash") hash: String): TxByHashResponse
+
+    @GET(TX_BY_HASH)
+    suspend fun transactionDetails(@Path("hash") hash: String): TxDetailsResponse
 }
+
+private const val TX_BY_HASH = "cosmos/tx/v1beta1/txs/{hash}"
 
 // All response DTO fields are nullable on purpose: Gson populates them via reflection and
 // bypasses Kotlin null-safety, so a malformed provider response would otherwise smuggle
@@ -96,4 +101,41 @@ data class TxResponse(
     val codespace: String?,
     val code: Int?,
     @SerializedName("raw_log") val rawLog: String?
+)
+
+// The same tx-by-hash response, read for the fee: the messages and the events the fee is derived from
+internal data class TxDetailsResponse(
+    @SerializedName("tx_response") val txResponse: TxDetails?
+)
+
+internal data class TxDetails(
+    val code: Int?,
+    val tx: Tx?,
+    val events: List<TxEvent>?
+) {
+    data class Tx(val body: Body?) {
+        data class Body(val messages: List<Message>?)
+    }
+
+    // MsgSend carries `amount` (bank denoms), MsgDeposit carries `coins` (asset notation)
+    data class Message(
+        @SerializedName("@type") val type: String?,
+        val amount: List<CoinResponse>?,
+        val coins: List<DepositCoin>?
+    )
+
+    data class DepositCoin(
+        val asset: String?,
+        val amount: String?
+    )
+}
+
+internal data class TxEvent(
+    val type: String?,
+    val attributes: List<TxEventAttribute>?
+)
+
+internal data class TxEventAttribute(
+    val key: String?,
+    val value: String?
 )

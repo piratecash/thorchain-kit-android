@@ -17,7 +17,6 @@ internal actual fun mainDatabaseFile(context: PlatformContext, databaseName: Str
 internal actual fun buildMainDatabase(context: PlatformContext, databaseName: String, databaseKey: ByteArray): MainDatabase {
     sqlCipherLoaded
     return Room.databaseBuilder(context, MainDatabase::class.java, databaseName)
-        .addMigrations(*MainDatabase.MIGRATIONS)
         // last resort only: everything stored is a re-syncable cache (no keys)
         .fallbackToDestructiveMigration()
         .allowMainThreadQueries()
