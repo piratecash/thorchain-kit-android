@@ -1,6 +1,5 @@
 package io.horizontalsystems.thorchainkit.transaction
 
-import com.google.protobuf.Any as ProtoAny
 import io.horizontalsystems.hdwalletkit.Utils
 import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.models.Asset
@@ -33,16 +32,59 @@ class TransactionSender internal constructor(
     private val sendMutex = Mutex()
 
     suspend fun send(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): String =
+        send(to, amount, denom, memo, TxSigner.Direct(signer))
+
+    /**
+     * As the [Signer] overload, signed on [signer] in SIGN_MODE_LEGACY_AMINO_JSON. THORChain networks only: elsewhere
+     * every external-signer overload throws [SendError.ExternalSignerUnsupportedNetwork] before any request.
+     */
+    public suspend fun send(
+        to: Address,
+        amount: BigInteger,
+        denom: String,
+        memo: String?,
+        signer: ThorchainExternalSigner
+    ): String = send(to, amount, denom, memo, amino(signer))
+
+    public suspend fun signSend(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): SignedTransaction =
+        signSend(to, amount, denom, memo, TxSigner.Direct(signer))
+
+    public suspend fun signSend(
+        to: Address,
+        amount: BigInteger,
+        denom: String,
+        memo: String?,
+        signer: ThorchainExternalSigner
+    ): SignedTransaction = signSend(to, amount, denom, memo, amino(signer))
+
+    suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: Signer): String =
+        deposit(asset, amount, memo, TxSigner.Direct(signer))
+
+    public suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: ThorchainExternalSigner): String =
+        deposit(asset, amount, memo, amino(signer))
+
+    // The amino type names are THORChain's; Maya's are not verified.
+    private fun amino(signer: ThorchainExternalSigner): TxSigner {
+        if (network.protocolPath != THORCHAIN_PROTOCOL) throw SendError.ExternalSignerUnsupportedNetwork(network)
+        return TxSigner.Amino(signer)
+    }
+
+    private suspend fun send(to: Address, amount: BigInteger, denom: String, memo: String?, signer: TxSigner): String =
         sendMutex.withLock {
             broadcastRawTransaction(signMsgSend(to, amount, denom, memo, signer).raw)
         }
 
-    public suspend fun signSend(to: Address, amount: BigInteger, denom: String, memo: String?, signer: Signer): SignedTransaction =
-        sendMutex.withLock { signMsgSend(to, amount, denom, memo, signer) }
+    private suspend fun signSend(
+        to: Address,
+        amount: BigInteger,
+        denom: String,
+        memo: String?,
+        signer: TxSigner
+    ): SignedTransaction = sendMutex.withLock { signMsgSend(to, amount, denom, memo, signer) }
 
-    suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: Signer): String =
+    private suspend fun deposit(asset: Asset, amount: BigInteger, memo: String, signer: TxSigner): String =
         sendMutex.withLock {
-            val message = TxBuilder.msgDeposit(asset, amount, memo, address)
+            val message = TxMessage.Deposit(asset, amount, memo, address)
             broadcastRawTransaction(sign(listOf(message), "", TxBuilder.DEPOSIT_GAS_LIMIT, signer).raw)
         }
 
@@ -60,19 +102,19 @@ class TransactionSender internal constructor(
         amount: BigInteger,
         denom: String,
         memo: String?,
-        signer: Signer
+        signer: TxSigner
     ): SignedTransaction {
         require(to.prefix == network.addressPrefix) { "Address prefix mismatch: ${to.prefix}" }
 
-        val message = TxBuilder.msgSend(address, to, amount, denom)
+        val message = TxMessage.Send(address, to, amount, denom)
         return sign(listOf(message), memo ?: "", TxBuilder.DEFAULT_GAS_LIMIT, signer)
     }
 
     private suspend fun sign(
-        messages: List<ProtoAny>,
+        messages: List<TxMessage>,
         memo: String,
         gasLimit: Long,
-        signer: Signer
+        signer: TxSigner
     ): SignedTransaction {
         val signerAddress = Address(address.prefix, Utils.sha256Hash160(signer.publicKey))
         if (signerAddress != address) {
@@ -82,18 +124,7 @@ class TransactionSender internal constructor(
         val account = thornodeApiProvider.fetchAccount(address)
             ?: throw SendError.AccountNotFound()
 
-        val txRaw = TxBuilder.buildSigned(
-            messages = messages,
-            memo = memo,
-            accountNumber = account.accountNumber,
-            sequence = account.sequence,
-            // pinned per network — never taken from the node, so a malicious endpoint
-            // cannot make the kit sign a transaction valid on a different network
-            chainId = network.chainId,
-            gasLimit = gasLimit,
-            feeDenom = network.assetResolver.nativeDenom,
-            signer = signer
-        )
+        val txRaw = signer.buildSigned(messages, memo, account, network, gasLimit)
 
         return SignedTransaction(txRaw, TxBuilder.txHash(txRaw), account.accountNumber, account.sequence)
     }
@@ -145,6 +176,12 @@ class TransactionSender internal constructor(
         // the signer's key does not derive the kit's address (e.g. watch-account kit)
         class SignerMismatch : SendError()
 
+        // an external signer returned a signature that does not verify for the sign doc with its key
+        public class InvalidSignature : SendError()
+
+        // external (amino) signing is implemented for THORChain only
+        public class ExternalSignerUnsupportedNetwork(public val network: Network) : SendError()
+
         // The broadcast outcome is unknown: the transaction MAY have been accepted and
         // can still confirm. Do NOT blindly retry the payment — track txHash (via
         // fetchTransaction / history sync) until its status is known.
@@ -161,6 +198,7 @@ class TransactionSender internal constructor(
     companion object {
         // ~6s block time: 5 x 3s covers inclusion of an accepted tx
         private const val CONFIRMATION_ATTEMPTS = 5
+        private const val THORCHAIN_PROTOCOL = "thorchain"
         private const val CONFIRMATION_DELAY_MS = 3_000L
 
         // cosmos-sdk x/auth/ante sigverify
