@@ -7,6 +7,7 @@ import cosmos.base.v1beta1.CoinOuterClass
 import cosmos.crypto.secp256k1.Keys
 import cosmos.tx.signing.v1beta1.Signing.SignMode
 import cosmos.tx.v1beta1.TxOuterClass
+import fr.acinq.secp256k1.Secp256k1
 import io.horizontalsystems.hdwalletkit.Utils
 import io.horizontalsystems.thorchainkit.models.Address
 import io.horizontalsystems.thorchainkit.models.Asset
@@ -91,13 +92,69 @@ object TxBuilder {
         feeDenom: String,
         signer: Signer
     ): ByteArray {
-        val bodyBytes = TxOuterClass.TxBody.newBuilder()
+        val bodyBytes = bodyBytes(messages, memo)
+        val authInfoBytes =
+            authInfoBytes(signer.publicKey, SignMode.SIGN_MODE_DIRECT, sequence, gasLimit, feeAmount, feeDenom)
+
+        val signDoc = TxOuterClass.SignDoc.newBuilder()
+            .setBodyBytes(bodyBytes)
+            .setAuthInfoBytes(authInfoBytes)
+            .setChainId(chainId)
+            .setAccountNumber(accountNumber)
+            .build()
+
+        return txRaw(bodyBytes, authInfoBytes, signer.sign(Utils.sha256(signDoc.toByteArray())))
+    }
+
+    /**
+     * Signs [messages] in SIGN_MODE_LEGACY_AMINO_JSON on [signer] and refuses a signature that does not verify for the
+     * sign doc with the signer's key.
+     */
+    internal suspend fun buildAminoSigned(
+        messages: List<TxMessage>,
+        memo: String,
+        accountNumber: Long,
+        sequence: Long,
+        chainId: String,
+        gasLimit: Long,
+        feeAmount: BigInteger?,
+        feeDenom: String,
+        signer: ThorchainExternalSigner
+    ): ByteArray {
+        val fee = listOfNotNull(feeAmount?.let { AminoJson.coin(it, feeDenom) })
+        val signDoc = AminoJson.signDoc(
+            messages.map { it.aminoJson() }, memo, accountNumber, sequence, chainId, gasLimit, fee
+        )
+        val signature = signer.signAmino(signDoc)
+        if (!verifies(signature, Utils.sha256(signDoc), signer.publicKey)) {
+            throw TransactionSender.SendError.InvalidSignature()
+        }
+
+        val authInfoBytes = authInfoBytes(
+            signer.publicKey, SignMode.SIGN_MODE_LEGACY_AMINO_JSON, sequence, gasLimit, feeAmount, feeDenom
+        )
+        return txRaw(bodyBytes(messages.map { it.proto() }, memo), authInfoBytes, signature)
+    }
+
+    private fun verifies(signature: ByteArray, digest: ByteArray, publicKey: ByteArray): Boolean =
+        signature.size == SIGNATURE_SIZE && Secp256k1.get().verify(signature, digest, publicKey)
+
+    private fun bodyBytes(messages: List<Any>, memo: String): ByteString =
+        TxOuterClass.TxBody.newBuilder()
             .addAllMessages(messages)
             .setMemo(memo)
             .build()
             .toByteString()
 
-        val authInfoBytes = TxOuterClass.AuthInfo.newBuilder()
+    private fun authInfoBytes(
+        publicKey: ByteArray,
+        signMode: SignMode,
+        sequence: Long,
+        gasLimit: Long,
+        feeAmount: BigInteger?,
+        feeDenom: String
+    ): ByteString =
+        TxOuterClass.AuthInfo.newBuilder()
             .addSignerInfos(
                 TxOuterClass.SignerInfo.newBuilder()
                     .setPublicKey(
@@ -105,7 +162,7 @@ object TxBuilder {
                             .setTypeUrl(TYPE_URL_PUB_KEY)
                             .setValue(
                                 Keys.PubKey.newBuilder()
-                                    .setKey(ByteString.copyFrom(signer.publicKey))
+                                    .setKey(ByteString.copyFrom(publicKey))
                                     .build()
                                     .toByteString()
                             )
@@ -114,7 +171,7 @@ object TxBuilder {
                         TxOuterClass.ModeInfo.newBuilder()
                             .setSingle(
                                 TxOuterClass.ModeInfo.Single.newBuilder()
-                                    .setMode(SignMode.SIGN_MODE_DIRECT)
+                                    .setMode(signMode)
                             )
                     )
                     .setSequence(sequence)
@@ -135,20 +192,13 @@ object TxBuilder {
             .build()
             .toByteString()
 
-        val signDoc = TxOuterClass.SignDoc.newBuilder()
-            .setBodyBytes(bodyBytes)
-            .setAuthInfoBytes(authInfoBytes)
-            .setChainId(chainId)
-            .setAccountNumber(accountNumber)
-            .build()
-
-        val signature = signer.sign(Utils.sha256(signDoc.toByteArray()))
-
-        return TxOuterClass.TxRaw.newBuilder()
+    private fun txRaw(bodyBytes: ByteString, authInfoBytes: ByteString, signature: ByteArray): ByteArray =
+        TxOuterClass.TxRaw.newBuilder()
             .setBodyBytes(bodyBytes)
             .setAuthInfoBytes(authInfoBytes)
             .addSignatures(ByteString.copyFrom(signature))
             .build()
             .toByteArray()
-    }
+
+    private const val SIGNATURE_SIZE = 64
 }

@@ -15,6 +15,7 @@ import io.horizontalsystems.thorchainkit.sync.SyncTimer
 import io.horizontalsystems.thorchainkit.sync.Syncer
 import io.horizontalsystems.thorchainkit.sync.TransactionSyncer
 import io.horizontalsystems.thorchainkit.transaction.Signer
+import io.horizontalsystems.thorchainkit.transaction.ThorchainExternalSigner
 import io.horizontalsystems.thorchainkit.transaction.TransactionSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -144,11 +145,19 @@ class ThorchainKit private constructor(
         denom: String = network.assetResolver.nativeDenom,
         memo: String? = null,
         signer: Signer
-    ): String {
-        val txHash = transactionSender.send(to, amount, denom, memo, signer)
-        refresh()
-        return txHash
-    }
+    ): String = refreshedAfter(transactionSender.send(to, amount, denom, memo, signer))
+
+    /**
+     * Signs on a hardware [signer] in SIGN_MODE_LEGACY_AMINO_JSON. THORChain networks only: on Maya this and the other
+     * external-signer overloads throw [TransactionSender.SendError.ExternalSignerUnsupportedNetwork] before any request.
+     */
+    public suspend fun send(
+        to: Address,
+        amount: BigInteger,
+        denom: String = network.assetResolver.nativeDenom,
+        memo: String? = null,
+        signer: ThorchainExternalSigner
+    ): String = refreshedAfter(transactionSender.send(to, amount, denom, memo, signer))
 
     public suspend fun signSend(
         to: Address,
@@ -158,11 +167,16 @@ class ThorchainKit private constructor(
         memo: String? = null
     ): SignedTransaction = transactionSender.signSend(to, amount, denom, memo, signer)
 
-    public suspend fun broadcastRawTransaction(raw: ByteArray): String {
-        val txHash = transactionSender.broadcastRawTransaction(raw)
-        refresh()
-        return txHash
-    }
+    public suspend fun signSend(
+        to: Address,
+        amount: BigInteger,
+        signer: ThorchainExternalSigner,
+        denom: String = network.assetResolver.nativeDenom,
+        memo: String? = null
+    ): SignedTransaction = transactionSender.signSend(to, amount, denom, memo, signer)
+
+    public suspend fun broadcastRawTransaction(raw: ByteArray): String =
+        refreshedAfter(transactionSender.broadcastRawTransaction(raw))
 
     // true only once the tx is included in a block and succeeded
     public suspend fun transactionExists(hash: String): Boolean =
@@ -173,8 +187,16 @@ class ThorchainKit private constructor(
         amount: BigInteger,
         memo: String,
         signer: Signer
-    ): String {
-        val txHash = transactionSender.deposit(asset, amount, memo, signer)
+    ): String = refreshedAfter(transactionSender.deposit(asset, amount, memo, signer))
+
+    public suspend fun deposit(
+        asset: Asset,
+        amount: BigInteger,
+        memo: String,
+        signer: ThorchainExternalSigner
+    ): String = refreshedAfter(transactionSender.deposit(asset, amount, memo, signer))
+
+    private fun refreshedAfter(txHash: String): String {
         refresh()
         return txHash
     }
